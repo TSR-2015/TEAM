@@ -1,16 +1,59 @@
+"""
+main.py — FastAPI application entry-point for TeamBrain AI.
+
+Responsibilities:
+  1. Create the ``FastAPI`` application instance.
+  2. Register CORS middleware (permissive for hackathon development).
+  3. Mount the memory router from ``routes.py``.
+  4. Ensure required data directories exist on startup.
+"""
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
-from app.routes import router
+
+from app.git_routes import router as git_router
+from app.routes import router as memory_router
 from app.utils import ensure_dirs, logger
 
+# ---------------------------------------------------------------------------
+# Application constants (will move to a config module later)
+# ---------------------------------------------------------------------------
+APP_NAME: str = "TeamBrain AI"
+APP_VERSION: str = "0.1.0"
+
+
+# ---------------------------------------------------------------------------
+# Lifespan — replaces the deprecated @app.on_event("startup") pattern
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup / shutdown lifecycle hook.
+
+    On startup the required data directories are created if they do not
+    already exist.
+    """
+    logger.info("Initializing %s v%s …", APP_NAME, APP_VERSION)
+    ensure_dirs(["data/memories"])
+    yield  # ← application runs while suspended here
+    logger.info("Shutting down %s.", APP_NAME)
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
 app = FastAPI(
-    title=settings.APP_NAME,
-    debug=settings.DEBUG,
-    version="0.1.0"
+    title=APP_NAME,
+    version=APP_VERSION,
+    lifespan=lifespan,
 )
 
-# Configure CORS Middleware
+# Permissive CORS for local / hackathon development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,22 +62,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register endpoints under /api prefix
-app.include_router(router, prefix="/api")
+# Mount routers
+app.include_router(memory_router)
+app.include_router(git_router)
 
-@app.on_event("startup")
-def on_startup():
-    logger.info("Initializing TeamBrain AI application...")
-    # Ensure standard data directories are created on launch
-    ensure_dirs([
-        "data/memories",
-        "data/meetings",
-        "data/uploads"
-    ])
+
+# ---------------------------------------------------------------------------
+# Root health-check
+# ---------------------------------------------------------------------------
+
 
 @app.get("/")
-def root():
+def root() -> dict:
+    """Root endpoint — basic health-check / welcome message."""
     return {
-        "message": f"Welcome to {settings.APP_NAME}!",
-        "documentation": "/docs"
+        "message": f"Welcome to {APP_NAME}!",
+        "version": APP_VERSION,
+        "docs": "/docs",
     }

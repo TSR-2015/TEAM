@@ -1,0 +1,13 @@
+{
+    "id": "2e1e28c9-028e-40ec-8096-71cad95b9cad",
+    "title": "Authentication Updated",
+    "content": "The backend switched from Firebase to JWT.",
+    "source": "meeting",
+    "type": "meeting",
+    "author": "Jeevan",
+    "timestamp": "2026-07-01T15:29:16.742930Z",
+    "tags": [
+        "jwt",
+        "backend"
+    ]
+}

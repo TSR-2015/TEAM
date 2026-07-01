@@ -1,41 +1,84 @@
-from fastapi import APIRouter, Request, Header
+"""
+routes.py — FastAPI router for the TeamBrain AI Memory Engine.
+
+Endpoints
+~~~~~~~~~
+* ``POST /memory/add``     — ingest a new memory record.
+* ``GET  /memory/search``  — full-text substring search across memories.
+* ``GET  /memory/all``     — return every stored memory (convenience / debug).
+
+The ``MemoryStore`` is injected via ``Depends(get_memory_store)`` so that:
+  1. There are **no module-level global variables**.
+  2. Tests can easily override the dependency to point at a temp directory.
+"""
+
 from typing import List
-from pydantic import BaseModel
-from app.models import MemoryItem, MeetingSummary
-from app.memory import memory_manager
-from app.meetings import meeting_manager
-from app.github_webhook import handle_github_webhook
 
-router = APIRouter()
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-class MeetingCreateRequest(BaseModel):
-    id: str
-    title: str
-    date: str
-    transcript: str
+from app.memory import MemoryStore
+from app.models import Memory, MemoryAddResponse, MemoryCreate
 
-@router.get("/health")
-def health_check():
-    """Health check endpoint to verify server status."""
-    return {"status": "ok", "app": "TeamBrain AI"}
+router = APIRouter(prefix="/memory", tags=["Memory"])
 
-@router.post("/memories", response_model=MemoryItem)
-def add_memory(item: MemoryItem):
-    """Add a new item to shared team memory."""
-    memory_manager.add_memory(item)
-    return item
 
-@router.get("/memories", response_model=List[MemoryItem])
-def get_memories():
-    """Retrieve all shared team memories."""
-    return memory_manager.get_all_memories()
+# ---------------------------------------------------------------------------
+# Dependency — provides a MemoryStore to each request handler
+# ---------------------------------------------------------------------------
 
-@router.post("/meetings", response_model=MeetingSummary)
-def process_meeting(req: MeetingCreateRequest):
-    """Submit a meeting transcript to summarize, extract actions, and persist."""
-    return meeting_manager.process_meeting(req.id, req.title, req.date, req.transcript)
 
-@router.post("/webhook/github")
-async def github_webhook(request: Request, x_hub_signature_256: str = Header(None)):
-    """Receives and validates GitHub Webhook payloads."""
-    return await handle_github_webhook(request, x_hub_signature_256)
+def get_memory_store() -> MemoryStore:
+    """FastAPI dependency that yields a ``MemoryStore`` instance.
+
+    By default it uses the standard ``data/memories`` directory.
+    Override this dependency in tests to use a temporary path.
+    """
+    return MemoryStore()
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/add", response_model=MemoryAddResponse, status_code=201)
+def add_memory(
+    payload: MemoryCreate,
+    store: MemoryStore = Depends(get_memory_store),
+) -> MemoryAddResponse:
+    """Ingest a new memory.
+
+    Accepts user-supplied fields (title, content, source, type, author, tags),
+    auto-generates ``id`` (UUID4) and ``timestamp`` (UTC now), persists the
+    record as a JSON file, and returns the generated ``memory_id``.
+    """
+    try:
+        memory = Memory(**payload.model_dump())
+        store.save(memory)
+        return MemoryAddResponse(memory_id=str(memory.id))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to persist memory: {exc}",
+        ) from exc
+
+
+@router.get("/search", response_model=List[Memory])
+def search_memories(
+    q: str = Query(..., min_length=1, description="Search term."),
+    store: MemoryStore = Depends(get_memory_store),
+) -> List[Memory]:
+    """Search stored memories by a substring match on **title** and **content**.
+
+    Returns all memories where the query string appears (case-insensitive).
+    """
+    results: List[Memory] = store.search(q)
+    return results
+
+
+@router.get("/all", response_model=List[Memory])
+def list_all_memories(
+    store: MemoryStore = Depends(get_memory_store),
+) -> List[Memory]:
+    """Return every stored memory.  Useful for debugging and admin dashboards."""
+    return store.load_all()
